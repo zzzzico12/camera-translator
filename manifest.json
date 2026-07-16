@@ -1,0 +1,24 @@
+{
+  "name": "カメラ翻訳",
+  "short_name": "カメラ翻訳",
+  "description": "カメラに写した英語のテキストをリアルタイムで日本語に翻訳して表示するアプリ",
+  "start_url": "./camera-translator.html",
+  "display": "standalone",
+  "background_color": "#0b1220",
+  "theme_color": "#1e293b",
+  "orientation": "any",
+  "icons": [
+    {
+      "src": "icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

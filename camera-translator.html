@@ -1,0 +1,430 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <title>カメラ翻訳</title>
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#1e293b">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="カメラ翻訳">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' https://cdn.jsdelivr.net; worker-src 'self' blob: https://cdn.jsdelivr.net; connect-src https://cdn.jsdelivr.net https://api.mymemory.translated.net; style-src 'unsafe-inline'; img-src 'self' blob: data:; manifest-src 'self'">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+    html, body {
+      height: 100%;
+      background: #0b1220;
+      overflow: hidden;
+      font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Noto Sans JP", sans-serif;
+    }
+
+    #container {
+      position: relative;
+      width: 100vw;
+      height: 100vh;
+      background: #000;
+    }
+
+    #video {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      background: #000;
+    }
+
+    #overlay {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+    }
+
+    #hint {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 14px;
+      color: #cbd5e1;
+      text-align: center;
+      padding: 0 32px;
+      z-index: 2;
+    }
+
+    #hint .icon { font-size: 48px; }
+    #hint p { font-size: 15px; line-height: 1.6; max-width: 320px; }
+
+    #topBar {
+      position: absolute;
+      top: max(14px, env(safe-area-inset-top));
+      left: 0;
+      right: 0;
+      display: flex;
+      justify-content: center;
+      z-index: 3;
+      pointer-events: none;
+    }
+
+    #status {
+      background: rgba(15, 23, 42, 0.72);
+      color: #e2e8f0;
+      font-size: 13px;
+      padding: 7px 16px;
+      border-radius: 999px;
+      backdrop-filter: blur(6px);
+      min-width: 140px;
+      text-align: center;
+    }
+
+    #controls {
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: max(24px, env(safe-area-inset-bottom));
+      display: flex;
+      justify-content: center;
+      gap: 14px;
+      z-index: 3;
+    }
+
+    button {
+      background: #1e40af;
+      border: none;
+      color: #fff;
+      padding: 14px 30px;
+      font-size: 16px;
+      font-weight: 600;
+      border-radius: 999px;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.35);
+      cursor: pointer;
+      transition: transform 0.15s, opacity 0.15s;
+    }
+
+    button:active { transform: scale(0.96); }
+
+    button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    #stopBtn { background: #b91c1c; }
+
+    #error {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      color: #fca5a5;
+      background: rgba(15, 23, 42, 0.9);
+      padding: 18px 22px;
+      border-radius: 12px;
+      font-size: 14px;
+      line-height: 1.6;
+      text-align: center;
+      max-width: 320px;
+      z-index: 5;
+      display: none;
+      white-space: pre-line;
+    }
+  </style>
+</head>
+<body>
+  <div id="container">
+    <video id="video" autoplay playsinline muted></video>
+    <canvas id="overlay"></canvas>
+
+    <div id="hint">
+      <div class="icon">📷🇯🇵</div>
+      <p>英語のテキストにカメラを向けると、その場に日本語訳を重ねて表示します。</p>
+    </div>
+
+    <div id="topBar">
+      <div id="status">待機中</div>
+    </div>
+
+    <div id="controls">
+      <button id="startBtn">カメラ起動</button>
+      <button id="stopBtn" disabled>停止</button>
+    </div>
+
+    <div id="error"></div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js" crossorigin="anonymous"></script>
+  <script>
+    const video = document.getElementById('video');
+    const overlay = document.getElementById('overlay');
+    const overlayCtx = overlay.getContext('2d');
+    const hint = document.getElementById('hint');
+    const statusEl = document.getElementById('status');
+    const startBtn = document.getElementById('startBtn');
+    const stopBtn = document.getElementById('stopBtn');
+    const errorDiv = document.getElementById('error');
+
+    const captureCanvas = document.createElement('canvas');
+    const captureCtx = captureCanvas.getContext('2d', { willReadFrequently: true });
+
+    const OCR_MAX_DIM = 640;      // OCR用にダウンスケールする最大辺
+    const SCAN_INTERVAL_MS = 1200; // 1スキャン完了後、次スキャン開始までの待機時間
+    const MIN_CONFIDENCE = 55;     // Tesseractの信頼度スコア(0-100)の足切りライン
+    const MIN_LETTERS = 2;         // ノイズ除去: 最低限含むべき英字数
+    const CACHE_MAX = 400;         // 翻訳キャッシュの最大保持件数
+
+    let stream = null;
+    let worker = null;
+    let scanning = false;
+    let scanTimer = null;
+    let lastBoxes = [];
+    const translationCache = new Map();
+
+    function showError(message) {
+      errorDiv.textContent = message;
+      errorDiv.style.display = 'block';
+    }
+
+    function hideError() {
+      errorDiv.style.display = 'none';
+    }
+
+    function resizeOverlay() {
+      overlay.width = overlay.clientWidth;
+      overlay.height = overlay.clientHeight;
+      drawOverlay();
+    }
+
+    async function getCameraStream() {
+      const preferred = {
+        video: {
+          facingMode: { ideal: 'environment' },
+          width: { ideal: 1280 },
+          height: { ideal: 720 }
+        },
+        audio: false
+      };
+      try {
+        return await navigator.mediaDevices.getUserMedia(preferred);
+      } catch (e) {
+        return await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+      }
+    }
+
+    async function ensureWorker() {
+      if (worker) return worker;
+      statusEl.textContent = 'OCRエンジンを準備中…';
+      worker = await Tesseract.createWorker('eng');
+      return worker;
+    }
+
+    async function startCamera() {
+      hideError();
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        showError('このブラウザはカメラ機能に対応していません。\nSafariまたはChromeの最新版でお試しください。');
+        return;
+      }
+      startBtn.disabled = true;
+      try {
+        stream = await getCameraStream();
+        video.srcObject = stream;
+        await video.play();
+        hint.style.display = 'none';
+        resizeOverlay();
+        stopBtn.disabled = false;
+
+        await ensureWorker();
+
+        scanning = true;
+        statusEl.textContent = 'テキストを探しています…';
+        scheduleScan(200);
+      } catch (err) {
+        console.error(err);
+        startBtn.disabled = false;
+        showError('カメラにアクセスできませんでした。\nブラウザの設定でカメラの使用を許可してください。\n(HTTPS接続が必要です)');
+      }
+    }
+
+    function stopCamera() {
+      scanning = false;
+      if (scanTimer) { clearTimeout(scanTimer); scanTimer = null; }
+      if (stream) {
+        stream.getTracks().forEach((t) => t.stop());
+        stream = null;
+      }
+      video.srcObject = null;
+      lastBoxes = [];
+      overlayCtx.clearRect(0, 0, overlay.width, overlay.height);
+      startBtn.disabled = false;
+      stopBtn.disabled = true;
+      statusEl.textContent = '待機中';
+      hint.style.display = 'flex';
+    }
+
+    function scheduleScan(delay) {
+      if (!scanning) return;
+      scanTimer = setTimeout(runScanCycle, delay);
+    }
+
+    async function runScanCycle() {
+      if (!scanning) return;
+      if (!video.videoWidth) {
+        scheduleScan(300);
+        return;
+      }
+      try {
+        statusEl.textContent = '認識中…';
+
+        const vw = video.videoWidth;
+        const vh = video.videoHeight;
+        const scale = Math.min(1, OCR_MAX_DIM / Math.max(vw, vh));
+        const cw = Math.max(1, Math.round(vw * scale));
+        const ch = Math.max(1, Math.round(vh * scale));
+        captureCanvas.width = cw;
+        captureCanvas.height = ch;
+        captureCtx.drawImage(video, 0, 0, cw, ch);
+
+        const { data } = await worker.recognize(captureCanvas);
+        const lines = (data.lines || []).filter((line) => {
+          const t = (line.text || '').trim();
+          if (line.confidence < MIN_CONFIDENCE) return false;
+          const letterCount = (t.match(/[A-Za-z]/g) || []).length;
+          return letterCount >= MIN_LETTERS;
+        });
+
+        const results = await Promise.all(
+          lines.map((line) => translateCached(line.text.trim().replace(/\s+/g, ' ')))
+        );
+
+        const boxes = [];
+        for (let i = 0; i < lines.length; i++) {
+          const translated = results[i];
+          if (translated) {
+            boxes.push({ bbox: lines[i].bbox, translated, ocrW: cw, ocrH: ch });
+          }
+        }
+
+        if (scanning) {
+          lastBoxes = boxes;
+          drawOverlay();
+          statusEl.textContent = boxes.length
+            ? `${boxes.length}件を翻訳中`
+            : 'テキストを探しています…';
+        }
+      } catch (err) {
+        console.error(err);
+        if (scanning) statusEl.textContent = '認識エラー';
+      } finally {
+        scheduleScan(SCAN_INTERVAL_MS);
+      }
+    }
+
+    async function translateCached(text) {
+      if (!text) return null;
+      if (translationCache.has(text)) return translationCache.get(text);
+      try {
+        const url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=en|ja`;
+        const res = await fetch(url);
+        if (!res.ok) return null;
+        const data = await res.json();
+        if (
+          data &&
+          data.responseData &&
+          typeof data.responseData.translatedText === 'string'
+        ) {
+          let translated = data.responseData.translatedText.slice(0, 300);
+          if (/MYMEMORY WARNING/i.test(translated)) return null;
+          cacheSet(text, translated);
+          return translated;
+        }
+      } catch (err) {
+        console.error(err);
+      }
+      return null;
+    }
+
+    function cacheSet(key, value) {
+      if (translationCache.size >= CACHE_MAX) {
+        const oldestKey = translationCache.keys().next().value;
+        translationCache.delete(oldestKey);
+      }
+      translationCache.set(key, value);
+    }
+
+    function computeVideoRect() {
+      const vw = video.videoWidth;
+      const vh = video.videoHeight;
+      const cw = overlay.width;
+      const ch = overlay.height;
+      if (!vw || !vh || !cw || !ch) return { x: 0, y: 0, w: cw, h: ch };
+      const scale = Math.min(cw / vw, ch / vh);
+      const w = vw * scale;
+      const h = vh * scale;
+      return { x: (cw - w) / 2, y: (ch - h) / 2, w, h };
+    }
+
+    function roundRect(ctx, x, y, w, h, r) {
+      ctx.beginPath();
+      ctx.moveTo(x + r, y);
+      ctx.arcTo(x + w, y, x + w, y + h, r);
+      ctx.arcTo(x + w, y + h, x, y + h, r);
+      ctx.arcTo(x, y + h, x, y, r);
+      ctx.arcTo(x, y, x + w, y, r);
+      ctx.closePath();
+    }
+
+    function drawOverlay() {
+      overlayCtx.clearRect(0, 0, overlay.width, overlay.height);
+      const rect = computeVideoRect();
+      if (!rect.w || !rect.h) return;
+
+      for (const box of lastBoxes) {
+        const { bbox, translated, ocrW, ocrH } = box;
+        const sx = rect.w / ocrW;
+        const sy = rect.h / ocrH;
+        const x0 = rect.x + bbox.x0 * sx;
+        const y0 = rect.y + bbox.y0 * sy;
+        const x1 = rect.x + bbox.x1 * sx;
+        const y1 = rect.y + bbox.y1 * sy;
+        const boxW = Math.max(x1 - x0, 24);
+        const boxH = Math.max(y1 - y0, 20);
+
+        overlayCtx.fillStyle = 'rgba(10, 20, 40, 0.85)';
+        roundRect(overlayCtx, x0, y0, boxW, boxH, 4);
+        overlayCtx.fill();
+
+        let fontSize = Math.max(11, Math.min(boxH * 0.7, 26));
+        overlayCtx.textBaseline = 'middle';
+        overlayCtx.fillStyle = '#ffe066';
+        overlayCtx.font = `600 ${fontSize}px "Hiragino Sans", "Noto Sans JP", sans-serif`;
+        while (fontSize > 9 && overlayCtx.measureText(translated).width > boxW - 8) {
+          fontSize -= 1;
+          overlayCtx.font = `600 ${fontSize}px "Hiragino Sans", "Noto Sans JP", sans-serif`;
+        }
+        overlayCtx.fillText(translated, x0 + 4, y0 + boxH / 2, boxW - 8);
+      }
+    }
+
+    startBtn.addEventListener('click', startCamera);
+    stopBtn.addEventListener('click', stopCamera);
+
+    window.addEventListener('resize', () => {
+      if (stream) resizeOverlay();
+    });
+
+    window.addEventListener('beforeunload', () => {
+      stopCamera();
+      if (worker) worker.terminate();
+    });
+
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('./sw.js');
+      });
+    }
+  </script>
+</body>
+</html>

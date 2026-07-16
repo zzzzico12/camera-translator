@@ -1,4 +1,4 @@
-const CACHE_NAME = 'camera-translator-v1';
+const CACHE_NAME = 'camera-translator-v2';
 const ASSETS = [
   './camera-translator.html',
   './manifest.json',

@@ -4,8 +4,8 @@
   "description": "カメラに写した英語のテキストをリアルタイムで日本語に翻訳して表示するアプリ",
   "start_url": "./camera-translator.html",
   "display": "standalone",
-  "background_color": "#0b1220",
-  "theme_color": "#1e293b",
+  "background_color": "#05070c",
+  "theme_color": "#05070c",
   "orientation": "any",
   "icons": [
     {

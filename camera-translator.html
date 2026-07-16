@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <title>カメラ翻訳</title>
   <link rel="manifest" href="manifest.json">
-  <meta name="theme-color" content="#1e293b">
+  <meta name="theme-color" content="#05070c">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -15,11 +15,24 @@
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 
+    :root {
+      --accent: #818cf8;
+      --accent-dim: rgba(129, 140, 248, 0.35);
+      --danger: #fb7185;
+      --danger-dim: rgba(251, 113, 133, 0.35);
+      --highlight: #fbbf24;
+      --ink: #e7e9f0;
+      --ink-dim: #8b93a7;
+      --bg: #05070c;
+      --surface: rgba(11, 14, 22, 0.72);
+    }
+
     html, body {
       height: 100%;
-      background: #0b1220;
+      background: var(--bg);
       overflow: hidden;
       font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Noto Sans JP", sans-serif;
+      color: var(--ink);
     }
 
     #container {
@@ -53,15 +66,59 @@
       flex-direction: column;
       align-items: center;
       justify-content: center;
-      gap: 14px;
-      color: #cbd5e1;
+      gap: 28px;
       text-align: center;
       padding: 0 32px;
       z-index: 2;
     }
 
-    #hint .icon { font-size: 48px; }
-    #hint p { font-size: 15px; line-height: 1.6; max-width: 320px; }
+    #viewfinder {
+      position: relative;
+      width: min(58vw, 220px);
+      height: min(58vw, 220px);
+    }
+
+    #viewfinder .corner {
+      position: absolute;
+      width: 30px;
+      height: 30px;
+      border: 3px solid var(--accent);
+      opacity: 0.85;
+    }
+
+    #viewfinder .corner.tl { top: 0; left: 0; border-right: none; border-bottom: none; border-top-left-radius: 8px; }
+    #viewfinder .corner.tr { top: 0; right: 0; border-left: none; border-bottom: none; border-top-right-radius: 8px; }
+    #viewfinder .corner.bl { bottom: 0; left: 0; border-right: none; border-top: none; border-bottom-left-radius: 8px; }
+    #viewfinder .corner.br { bottom: 0; right: 0; border-left: none; border-top: none; border-bottom-right-radius: 8px; }
+
+    #viewfinder .scanline {
+      position: absolute;
+      left: 8%;
+      right: 8%;
+      height: 2px;
+      background: linear-gradient(90deg, transparent, var(--accent) 30%, var(--accent) 70%, transparent);
+      box-shadow: 0 0 10px 1px var(--accent-dim);
+      animation: scan 2.6s ease-in-out infinite;
+    }
+
+    @keyframes scan {
+      0%, 100% { top: 14%; opacity: 0.9; }
+      50% { top: 82%; opacity: 0.5; }
+    }
+
+    #hint h1 {
+      font-size: 20px;
+      font-weight: 700;
+      letter-spacing: 0.01em;
+      color: var(--ink);
+    }
+
+    #hint p {
+      font-size: 14px;
+      line-height: 1.7;
+      max-width: 300px;
+      color: var(--ink-dim);
+    }
 
     #topBar {
       position: absolute;
@@ -75,13 +132,16 @@
     }
 
     #status {
-      background: rgba(15, 23, 42, 0.72);
-      color: #e2e8f0;
-      font-size: 13px;
-      padding: 7px 16px;
+      background: var(--surface);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      color: var(--ink-dim);
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.03em;
+      padding: 8px 18px;
       border-radius: 999px;
-      backdrop-filter: blur(6px);
-      min-width: 140px;
+      backdrop-filter: blur(10px);
+      min-width: 120px;
       text-align: center;
     }
 
@@ -89,39 +149,48 @@
       position: absolute;
       left: 0;
       right: 0;
-      bottom: max(24px, env(safe-area-inset-bottom));
+      bottom: max(88px, calc(env(safe-area-inset-bottom) + 64px));
       display: flex;
       justify-content: center;
-      gap: 14px;
       z-index: 3;
     }
 
     button {
-      background: #1e40af;
+      appearance: none;
+      background: linear-gradient(135deg, #818cf8, #6366f1);
       border: none;
       color: #fff;
-      padding: 14px 30px;
-      font-size: 16px;
-      font-weight: 600;
+      padding: 18px 48px;
+      font-size: 17px;
+      font-weight: 700;
+      letter-spacing: 0.02em;
       border-radius: 999px;
-      box-shadow: 0 4px 16px rgba(0,0,0,0.35);
+      box-shadow: 0 8px 24px -6px var(--accent-dim), 0 2px 6px rgba(0,0,0,0.4);
       cursor: pointer;
-      transition: transform 0.15s, opacity 0.15s;
+      transition: transform 0.15s, box-shadow 0.2s, background 0.2s;
+      min-width: 200px;
+      min-height: 56px;
     }
 
     button:active { transform: scale(0.96); }
 
-    button:disabled { opacity: 0.4; cursor: not-allowed; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; box-shadow: none; }
 
-    #stopBtn { background: #b91c1c; }
+    button.active {
+      background: linear-gradient(135deg, #fb7185, #e11d48);
+      box-shadow: 0 8px 24px -6px var(--danger-dim), 0 2px 6px rgba(0,0,0,0.4);
+    }
 
     #error {
       position: absolute;
       top: 50%;
       left: 50%;
       transform: translate(-50%, -50%);
-      color: #fca5a5;
-      background: rgba(15, 23, 42, 0.9);
+      color: #fecdd3;
+      background: var(--surface);
+      border: 1px solid rgba(251, 113, 133, 0.3);
+      border-left: 3px solid var(--danger);
+      backdrop-filter: blur(10px);
       padding: 18px 22px;
       border-radius: 12px;
       font-size: 14px;
@@ -140,8 +209,17 @@
     <canvas id="overlay"></canvas>
 
     <div id="hint">
-      <div class="icon">📷🇯🇵</div>
-      <p>英語のテキストにカメラを向けると、その場に日本語訳を重ねて表示します。</p>
+      <div id="viewfinder">
+        <div class="corner tl"></div>
+        <div class="corner tr"></div>
+        <div class="corner bl"></div>
+        <div class="corner br"></div>
+        <div class="scanline"></div>
+      </div>
+      <div>
+        <h1>英語にかざすだけ</h1>
+        <p>カメラで英語のテキストを捉えると、その場に日本語訳を重ねて表示します。</p>
+      </div>
     </div>
 
     <div id="topBar">
@@ -149,8 +227,7 @@
     </div>
 
     <div id="controls">
-      <button id="startBtn">カメラ起動</button>
-      <button id="stopBtn" disabled>停止</button>
+      <button id="toggleBtn">カメラを起動</button>
     </div>
 
     <div id="error"></div>
@@ -163,8 +240,7 @@
     const overlayCtx = overlay.getContext('2d');
     const hint = document.getElementById('hint');
     const statusEl = document.getElementById('status');
-    const startBtn = document.getElementById('startBtn');
-    const stopBtn = document.getElementById('stopBtn');
+    const toggleBtn = document.getElementById('toggleBtn');
     const errorDiv = document.getElementById('error');
 
     const captureCanvas = document.createElement('canvas');
@@ -227,23 +303,27 @@
         showError('このブラウザはカメラ機能に対応していません。\nSafariまたはChromeの最新版でお試しください。');
         return;
       }
-      startBtn.disabled = true;
+      toggleBtn.disabled = true;
+      toggleBtn.textContent = '起動中…';
       try {
         stream = await getCameraStream();
         video.srcObject = stream;
         await video.play();
         hint.style.display = 'none';
         resizeOverlay();
-        stopBtn.disabled = false;
 
         await ensureWorker();
 
         scanning = true;
         statusEl.textContent = 'テキストを探しています…';
+        toggleBtn.textContent = '停止';
+        toggleBtn.classList.add('active');
+        toggleBtn.disabled = false;
         scheduleScan(200);
       } catch (err) {
         console.error(err);
-        startBtn.disabled = false;
+        toggleBtn.textContent = 'カメラを起動';
+        toggleBtn.disabled = false;
         showError('カメラにアクセスできませんでした。\nブラウザの設定でカメラの使用を許可してください。\n(HTTPS接続が必要です)');
       }
     }
@@ -258,10 +338,19 @@
       video.srcObject = null;
       lastBoxes = [];
       overlayCtx.clearRect(0, 0, overlay.width, overlay.height);
-      startBtn.disabled = false;
-      stopBtn.disabled = true;
+      toggleBtn.disabled = false;
+      toggleBtn.textContent = 'カメラを起動';
+      toggleBtn.classList.remove('active');
       statusEl.textContent = '待機中';
       hint.style.display = 'flex';
+    }
+
+    function toggleCamera() {
+      if (stream) {
+        stopCamera();
+      } else {
+        startCamera();
+      }
     }
 
     function scheduleScan(delay) {
@@ -366,16 +455,6 @@
       return { x: (cw - w) / 2, y: (ch - h) / 2, w, h };
     }
 
-    function roundRect(ctx, x, y, w, h, r) {
-      ctx.beginPath();
-      ctx.moveTo(x + r, y);
-      ctx.arcTo(x + w, y, x + w, y + h, r);
-      ctx.arcTo(x + w, y + h, x, y + h, r);
-      ctx.arcTo(x, y + h, x, y, r);
-      ctx.arcTo(x, y, x + w, y, r);
-      ctx.closePath();
-    }
-
     function drawOverlay() {
       overlayCtx.clearRect(0, 0, overlay.width, overlay.height);
       const rect = computeVideoRect();
@@ -392,24 +471,32 @@
         const boxW = Math.max(x1 - x0, 24);
         const boxH = Math.max(y1 - y0, 20);
 
-        overlayCtx.fillStyle = 'rgba(10, 20, 40, 0.85)';
-        roundRect(overlayCtx, x0, y0, boxW, boxH, 4);
-        overlayCtx.fill();
-
-        let fontSize = Math.max(11, Math.min(boxH * 0.7, 26));
+        let fontSize = Math.max(12, Math.min(boxH * 0.78, 28));
         overlayCtx.textBaseline = 'middle';
-        overlayCtx.fillStyle = '#ffe066';
-        overlayCtx.font = `600 ${fontSize}px "Hiragino Sans", "Noto Sans JP", sans-serif`;
-        while (fontSize > 9 && overlayCtx.measureText(translated).width > boxW - 8) {
+        overlayCtx.lineJoin = 'round';
+        overlayCtx.font = `700 ${fontSize}px "Hiragino Sans", "Noto Sans JP", sans-serif`;
+        while (fontSize > 9 && overlayCtx.measureText(translated).width > boxW) {
           fontSize -= 1;
-          overlayCtx.font = `600 ${fontSize}px "Hiragino Sans", "Noto Sans JP", sans-serif`;
+          overlayCtx.font = `700 ${fontSize}px "Hiragino Sans", "Noto Sans JP", sans-serif`;
         }
-        overlayCtx.fillText(translated, x0 + 4, y0 + boxH / 2, boxW - 8);
+
+        const tx = x0;
+        const ty = y0 + boxH / 2;
+
+        // 背景は使わず、縁取りだけで映像に溶け込ませつつ視認性を確保
+        overlayCtx.shadowColor = 'rgba(0, 0, 0, 0.7)';
+        overlayCtx.shadowBlur = fontSize * 0.35;
+        overlayCtx.strokeStyle = 'rgba(0, 0, 0, 0.75)';
+        overlayCtx.lineWidth = fontSize * 0.24;
+        overlayCtx.strokeText(translated, tx, ty);
+
+        overlayCtx.shadowBlur = 0;
+        overlayCtx.fillStyle = '#fbbf24';
+        overlayCtx.fillText(translated, tx, ty);
       }
     }
 
-    startBtn.addEventListener('click', startCamera);
-    stopBtn.addEventListener('click', stopCamera);
+    toggleBtn.addEventListener('click', toggleCamera);
 
     window.addEventListener('resize', () => {
       if (stream) resizeOverlay();

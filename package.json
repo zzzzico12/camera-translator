@@ -1,0 +1,6 @@
+{
+  "name": "camera-translator",
+  "private": true,
+  "version": "1.0.0",
+  "description": "camera-translatorのDeepL翻訳プロキシ(Vercel Serverless Function, /api/translate)"
+}

@@ -11,7 +11,8 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="カメラ翻訳">
   <link rel="apple-touch-icon" href="icons/icon-192.png">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' https://cdn.jsdelivr.net; worker-src 'self' blob: https://cdn.jsdelivr.net; connect-src https://cdn.jsdelivr.net https://api.mymemory.translated.net; style-src 'unsafe-inline'; img-src 'self' blob: data:; manifest-src 'self'">
+  <!-- connect-srcのVercelドメインは、api/translate.jsをデプロイ後に実際のURLへ差し替えること -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' https://cdn.jsdelivr.net; worker-src 'self' blob: https://cdn.jsdelivr.net; connect-src https://cdn.jsdelivr.net https://api.mymemory.translated.net https://*.vercel.app; style-src 'unsafe-inline'; img-src 'self' blob: data:; manifest-src 'self'">
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 
@@ -252,6 +253,10 @@
     const MIN_LETTERS = 2;         // ノイズ除去: 最低限含むべき英字数
     const CACHE_MAX = 400;         // 翻訳キャッシュの最大保持件数
 
+    // DeepLプロキシ(Vercel Serverless Function)。api/translate.jsをデプロイ後、
+    // 発行されたURL + '/api/translate' に差し替える。失敗時はMyMemory APIにフォールバックする。
+    const TRANSLATE_PROXY_URL = 'https://camera-translator.vercel.app/api/translate';
+
     let stream = null;
     let worker = null;
     let scanning = false;
@@ -414,6 +419,32 @@
     async function translateCached(text) {
       if (!text) return null;
       if (translationCache.has(text)) return translationCache.get(text);
+
+      const translated = (await translateViaDeepL(text)) || (await translateViaMyMemory(text));
+      if (translated) cacheSet(text, translated);
+      return translated;
+    }
+
+    async function translateViaDeepL(text) {
+      if (!TRANSLATE_PROXY_URL) return null;
+      try {
+        const res = await fetch(TRANSLATE_PROXY_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text, target_lang: 'JA' }),
+        });
+        if (!res.ok) return null;
+        const data = await res.json();
+        if (typeof data.translatedText === 'string' && data.translatedText.trim()) {
+          return data.translatedText.slice(0, 300);
+        }
+      } catch (err) {
+        console.error(err);
+      }
+      return null;
+    }
+
+    async function translateViaMyMemory(text) {
       try {
         const url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=en|ja`;
         const res = await fetch(url);
@@ -424,9 +455,8 @@
           data.responseData &&
           typeof data.responseData.translatedText === 'string'
         ) {
-          let translated = data.responseData.translatedText.slice(0, 300);
+          const translated = data.responseData.translatedText.slice(0, 300);
           if (/MYMEMORY WARNING/i.test(translated)) return null;
-          cacheSet(text, translated);
           return translated;
         }
       } catch (err) {

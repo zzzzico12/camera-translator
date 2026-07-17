@@ -1,4 +1,4 @@
-const CACHE_NAME = 'camera-translator-v2';
+const CACHE_NAME = 'camera-translator-v3';
 const ASSETS = [
   './camera-translator.html',
   './manifest.json',
@@ -26,6 +26,22 @@ self.addEventListener('fetch', (e) => {
   if (e.request.method !== 'GET') return;
   const url = new URL(e.request.url);
   if (url.origin !== self.location.origin) return; // 外部API/CDNはキャッシュせずネットワークに任せる
+
+  if (e.request.mode === 'navigate') {
+    // HTML本体は常にネットワーク優先。オフライン時のみキャッシュにフォールバックする
+    // (キャッシュ優先だと、キャッシュバージョンの更新漏れで古い画面が残り続けてしまう)
+    e.respondWith(
+      fetch(e.request)
+        .then((res) => {
+          const clone = res.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put(e.request, clone));
+          return res;
+        })
+        .catch(() => caches.match(e.request))
+    );
+    return;
+  }
+
   e.respondWith(
     caches.match(e.request).then((cached) => cached || fetch(e.request))
   );

@@ -253,9 +253,8 @@
     const MIN_LETTERS = 2;         // ノイズ除去: 最低限含むべき英字数
     const CACHE_MAX = 400;         // 翻訳キャッシュの最大保持件数
 
-    // DeepLプロキシ(Vercel Serverless Function)。api/translate.jsをデプロイ後、
-    // 発行されたURL + '/api/translate' に差し替える。失敗時はMyMemory APIにフォールバックする。
-    const TRANSLATE_PROXY_URL = 'https://camera-translator.vercel.app/api/translate';
+    // DeepLプロキシ(Vercel Serverless Function)。失敗時はMyMemory APIにフォールバックする。
+    const TRANSLATE_PROXY_URL = 'https://claude-pi-lilac.vercel.app/api/translate';
 
     let stream = null;
     let worker = null;

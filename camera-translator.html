@@ -21,7 +21,7 @@
       --accent-dim: rgba(129, 140, 248, 0.35);
       --danger: #fb7185;
       --danger-dim: rgba(251, 113, 133, 0.35);
-      --highlight: #fbbf24;
+      --highlight: #8cdcff;
       --ink: #e7e9f0;
       --ink-dim: #8b93a7;
       --bg: #05070c;
@@ -606,16 +606,18 @@
         const tx = x0;
         const ty = y0 + boxH / 2;
 
-        // 背景は使わず、縁取りだけで映像に溶け込ませつつ視認性を確保
-        overlayCtx.shadowColor = 'rgba(0, 0, 0, 0.7)';
-        overlayCtx.shadowBlur = fontSize * 0.35;
-        overlayCtx.strokeStyle = 'rgba(0, 0, 0, 0.75)';
-        overlayCtx.lineWidth = fontSize * 0.24;
+        // ホログラム風: シアンの光暈をまとった氷白文字。黒縁取りで視認性を確保
+        overlayCtx.strokeStyle = 'rgba(0, 0, 0, 0.85)';
+        overlayCtx.lineWidth = fontSize * 0.22;
         overlayCtx.strokeText(translated, tx, ty);
 
-        overlayCtx.shadowBlur = 0;
-        overlayCtx.fillStyle = '#fbbf24';
+        overlayCtx.shadowColor = 'rgba(140, 220, 255, 0.95)';
+        overlayCtx.shadowBlur = fontSize * 0.85;
+        overlayCtx.fillStyle = '#eaf7ff';
         overlayCtx.fillText(translated, tx, ty);
+        overlayCtx.fillText(translated, tx, ty); // 二重描画でグローをにじませる
+
+        overlayCtx.shadowBlur = 0;
       }
     }
 

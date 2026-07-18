@@ -127,7 +127,9 @@
       left: 0;
       right: 0;
       display: flex;
-      justify-content: center;
+      flex-direction: column;
+      align-items: center;
+      gap: 8px;
       z-index: 3;
       pointer-events: none;
     }
@@ -144,6 +146,20 @@
       backdrop-filter: blur(10px);
       min-width: 120px;
       text-align: center;
+    }
+
+    #tiltWarning {
+      background: rgba(251, 113, 133, 0.16);
+      border: 1px solid rgba(251, 113, 133, 0.4);
+      color: #fecdd3;
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+      padding: 7px 16px;
+      border-radius: 999px;
+      backdrop-filter: blur(10px);
+      text-align: center;
+      display: none;
     }
 
     #controls {
@@ -225,6 +241,7 @@
 
     <div id="topBar">
       <div id="status">待機中</div>
+      <div id="tiltWarning">スマホを水平に構えてください</div>
     </div>
 
     <div id="controls">
@@ -241,6 +258,7 @@
     const overlayCtx = overlay.getContext('2d');
     const hint = document.getElementById('hint');
     const statusEl = document.getElementById('status');
+    const tiltWarningEl = document.getElementById('tiltWarning');
     const toggleBtn = document.getElementById('toggleBtn');
     const errorDiv = document.getElementById('error');
 
@@ -252,6 +270,8 @@
     const MIN_CONFIDENCE = 55;     // Tesseractの信頼度スコア(0-100)の足切りライン
     const MIN_LETTERS = 2;         // ノイズ除去: 最低限含むべき英字数
     const CACHE_MAX = 400;         // 翻訳キャッシュの最大保持件数
+    const TILT_WARN_DEG = 18;      // この角度を超えたら傾き警告を表示
+    const TILT_CLEAR_DEG = 12;     // この角度を下回ったら警告を消す(チラつき防止のヒステリシス)
 
     // DeepLプロキシ(Vercel Serverless Function)。失敗時はMyMemory APIにフォールバックする。
     const TRANSLATE_PROXY_URL = 'https://claude-pi-lilac.vercel.app/api/translate';
@@ -294,6 +314,36 @@
       }
     }
 
+    // 端末の左右の傾き(gamma)を見て、傾けすぎている間だけ警告を出す。
+    // スマホを立てて構えている前提でのおおまかな目安であり、正確な水準器ではない。
+    function handleDeviceOrientation(event) {
+      if (event.gamma === null || event.gamma === undefined) return;
+      const tilt = Math.abs(event.gamma);
+      if (tilt > TILT_WARN_DEG) {
+        tiltWarningEl.style.display = 'block';
+      } else if (tilt < TILT_CLEAR_DEG) {
+        tiltWarningEl.style.display = 'none';
+      }
+    }
+
+    async function enableTiltWarning() {
+      if (typeof DeviceOrientationEvent === 'undefined') return;
+      try {
+        if (typeof DeviceOrientationEvent.requestPermission === 'function') {
+          const result = await DeviceOrientationEvent.requestPermission();
+          if (result !== 'granted') return;
+        }
+        window.addEventListener('deviceorientation', handleDeviceOrientation);
+      } catch (err) {
+        console.error(err);
+      }
+    }
+
+    function disableTiltWarning() {
+      window.removeEventListener('deviceorientation', handleDeviceOrientation);
+      tiltWarningEl.style.display = 'none';
+    }
+
     async function ensureWorker() {
       if (worker) return worker;
       statusEl.textContent = 'OCRエンジンを準備中…';
@@ -320,6 +370,7 @@
         resizeOverlay();
 
         await ensureWorker();
+        enableTiltWarning();
 
         scanning = true;
         statusEl.textContent = 'テキストを探しています…';
@@ -342,6 +393,7 @@
         stream.getTracks().forEach((t) => t.stop());
         stream = null;
       }
+      disableTiltWarning();
       video.srcObject = null;
       lastBoxes = [];
       overlayCtx.clearRect(0, 0, overlay.width, overlay.height);
@@ -421,7 +473,8 @@
         captureCtx.drawImage(video, 0, 0, cw, ch);
         preprocessForOCR(captureCtx, cw, ch);
 
-        const { data } = await worker.recognize(captureCanvas);
+        // rotateAuto: スマホの向き(縦/横/上下逆)を自動検出して補正してから認識する
+        const { data } = await worker.recognize(captureCanvas, { rotateAuto: true });
         const lines = (data.lines || []).filter((line) => {
           const t = (line.text || '').trim();
           if (line.confidence < MIN_CONFIDENCE) return false;

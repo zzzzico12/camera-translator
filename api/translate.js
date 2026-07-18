@@ -3,6 +3,23 @@
 const ALLOWED_ORIGIN = 'https://zzzzico12.github.io';
 const MAX_TEXT_LENGTH = 500;
 const ALLOWED_TARGET_LANGS = new Set(['JA', 'EN']);
+const RATE_LIMIT_WINDOW_MS = 60 * 1000;
+const RATE_LIMIT_MAX = 20; // 1IPあたり1分間に許可するリクエスト数
+
+// サーバーレス関数のウォームインスタンス内でのみ有効な簡易レート制限(ベストエフォート)。
+// インスタンスが複数起動している場合は完全には防げないが、単純な連打・スクレイピングの抑止にはなる。
+const requestLog = new Map();
+
+function isRateLimited(ip) {
+  const now = Date.now();
+  for (const [key, timestamps] of requestLog) {
+    if (timestamps.every((t) => now - t >= RATE_LIMIT_WINDOW_MS)) requestLog.delete(key);
+  }
+  const timestamps = (requestLog.get(ip) || []).filter((t) => now - t < RATE_LIMIT_WINDOW_MS);
+  timestamps.push(now);
+  requestLog.set(ip, timestamps);
+  return timestamps.length > RATE_LIMIT_MAX;
+}
 
 function setCorsHeaders(req, res) {
   const origin = req.headers.origin;
@@ -24,6 +41,19 @@ module.exports = async function handler(req, res) {
 
   if (req.method !== 'POST') {
     res.status(405).json({ error: 'method not allowed' });
+    return;
+  }
+
+  // ブラウザ以外からの直接呼び出し(curl等)やなりすましを弾く。
+  // Originヘッダーはクライアント側で偽装可能だが、無防備な状態よりは悪用のハードルを上げられる。
+  if (req.headers.origin !== ALLOWED_ORIGIN) {
+    res.status(403).json({ error: 'forbidden' });
+    return;
+  }
+
+  const ip = (req.headers['x-forwarded-for'] || '').split(',')[0].trim() || req.socket.remoteAddress || 'unknown';
+  if (isRateLimited(ip)) {
+    res.status(429).json({ error: 'too many requests' });
     return;
   }
 

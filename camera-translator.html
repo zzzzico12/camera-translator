@@ -11,8 +11,8 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="カメラ翻訳">
   <link rel="apple-touch-icon" href="icons/icon-192.png">
-  <!-- connect-srcのVercelドメインは、api/translate.jsをデプロイ後に実際のURLへ差し替えること -->
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' https://cdn.jsdelivr.net; worker-src 'self' blob: https://cdn.jsdelivr.net; connect-src https://cdn.jsdelivr.net https://api.mymemory.translated.net https://*.vercel.app; style-src 'unsafe-inline'; img-src 'self' blob: data:; manifest-src 'self'">
+  <!-- connect-srcのVercelドメインは、api/translate.jsのデプロイ先を変更したら実際のURLへ差し替えること -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' https://cdn.jsdelivr.net; worker-src 'self' blob: https://cdn.jsdelivr.net; connect-src https://cdn.jsdelivr.net https://api.mymemory.translated.net https://claude-pi-lilac.vercel.app; style-src 'unsafe-inline'; img-src 'self' blob: data:; manifest-src 'self'">
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 
@@ -257,7 +257,7 @@
     </div>
 
     <div id="topBar">
-      <button id="langToggle" type="button">EN → 日本語</button>
+      <button id="langToggle" type="button">English → 日本語</button>
       <div id="status">待機中</div>
       <div id="tiltWarning">スマホを水平に構えてください</div>
     </div>
@@ -269,7 +269,7 @@
     <div id="error"></div>
   </div>
 
-  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js" integrity="sha384-GJqSu7vueQ9qN0E9yLPb3Wtpd7OrgK8KmYzC8T1IysG1bcvxvIO4qtYR/D3A991F" crossorigin="anonymous"></script>
   <script>
     const video = document.getElementById('video');
     const overlay = document.getElementById('overlay');
@@ -286,7 +286,7 @@
     const captureCanvas = document.createElement('canvas');
     const captureCtx = captureCanvas.getContext('2d', { willReadFrequently: true });
 
-    const OCR_MAX_DIM = 640;      // OCR用にダウンスケールする最大辺
+    const OCR_MAX_DIM = 900;      // OCR用にダウンスケールする最大辺(値を上げるほど細かい文字が潰れにくくなるが処理は遅くなる)
     const SCAN_INTERVAL_MS = 1200; // 1スキャン完了後、次スキャン開始までの待機時間
     const MIN_CONFIDENCE = 55;     // Tesseractの信頼度スコア(0-100)の足切りライン
     const MIN_LETTERS = 2;         // ノイズ除去: 最低限含むべき英字数
@@ -303,7 +303,7 @@
         ocrLang: 'eng',
         targetLang: 'JA',
         mmPair: 'en|ja',
-        label: 'EN → 日本語',
+        label: 'English → 日本語',
         scriptTest: /[A-Za-z]/g,
         minChars: MIN_LETTERS,
         uiLang: 'ja',
@@ -312,7 +312,7 @@
         ocrLang: 'jpn',
         targetLang: 'EN',
         mmPair: 'ja|en',
-        label: '日本語 → EN',
+        label: '日本語 → English',
         scriptTest: /[぀-ヿ一-鿿]/g,
         minChars: 1,
         uiLang: 'en',
@@ -562,7 +562,9 @@
       scanTimer = setTimeout(runScanCycle, delay);
     }
 
-    // グレースケール化+コントラスト伸長(上下1%の外れ値は無視)。
+    const SHARPEN_AMOUNT = 0.6; // アンシャープマスクの強度
+
+    // グレースケール化+コントラスト伸長(上下1%の外れ値は無視)+アンシャープマスク。
     // 看板の照明ムラや反射で眠くなりがちな画像のOCR精度を上げる。
     // 二値化まではせず、Tesseract内部の適応的な閾値処理に任せる。
     function preprocessForOCR(ctx, w, h) {
@@ -590,10 +592,35 @@
       if (range < 10) return; // ほぼ均一な画像は過剰強調を避けてそのまま
 
       const scale = 255 / range;
-      for (let i = 0, p = 0; p < pixelCount; i += 4, p++) {
+      const stretched = new Uint8ClampedArray(pixelCount);
+      for (let p = 0; p < pixelCount; p++) {
         const v = (gray[p] - lo) * scale;
-        const clamped = v < 0 ? 0 : v > 255 ? 255 : v;
-        data[i] = data[i + 1] = data[i + 2] = clamped;
+        stretched[p] = v < 0 ? 0 : v > 255 ? 255 : v;
+      }
+
+      // アンシャープマスク: 3x3ボックスブラーとの差分を強調し、文字のストローク輪郭を締めて小さな文字の潰れを軽減する
+      for (let y = 0; y < h; y++) {
+        for (let x = 0; x < w; x++) {
+          const p = y * w + x;
+          let sum = 0;
+          let count = 0;
+          for (let dy = -1; dy <= 1; dy++) {
+            const ny = y + dy;
+            if (ny < 0 || ny >= h) continue;
+            const rowBase = ny * w;
+            for (let dx = -1; dx <= 1; dx++) {
+              const nx = x + dx;
+              if (nx < 0 || nx >= w) continue;
+              sum += stretched[rowBase + nx];
+              count++;
+            }
+          }
+          const blurred = sum / count;
+          const sharpened = stretched[p] + SHARPEN_AMOUNT * (stretched[p] - blurred);
+          const clamped = sharpened < 0 ? 0 : sharpened > 255 ? 255 : sharpened;
+          const i = p * 4;
+          data[i] = data[i + 1] = data[i + 2] = clamped;
+        }
       }
 
       ctx.putImageData(imageData, 0, 0);

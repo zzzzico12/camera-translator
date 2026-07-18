@@ -148,6 +148,23 @@
       text-align: center;
     }
 
+    #langToggle {
+      appearance: none;
+      pointer-events: auto;
+      background: var(--surface);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      color: var(--ink);
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+      padding: 8px 20px;
+      border-radius: 999px;
+      backdrop-filter: blur(10px);
+      cursor: pointer;
+    }
+
+    #langToggle:disabled { opacity: 0.5; cursor: not-allowed; }
+
     #tiltWarning {
       background: rgba(251, 113, 133, 0.16);
       border: 1px solid rgba(251, 113, 133, 0.4);
@@ -234,12 +251,13 @@
         <div class="scanline"></div>
       </div>
       <div>
-        <h1>英語にかざすだけ</h1>
-        <p>カメラで英語のテキストを捉えると、その場に日本語訳を重ねて表示します。</p>
+        <h1 id="hintTitle">英語にかざすだけ</h1>
+        <p id="hintText">カメラで英語のテキストを捉えると、その場に日本語訳を重ねて表示します。</p>
       </div>
     </div>
 
     <div id="topBar">
+      <button id="langToggle" type="button">EN → 日本語</button>
       <div id="status">待機中</div>
       <div id="tiltWarning">スマホを水平に構えてください</div>
     </div>
@@ -257,9 +275,12 @@
     const overlay = document.getElementById('overlay');
     const overlayCtx = overlay.getContext('2d');
     const hint = document.getElementById('hint');
+    const hintTitleEl = document.getElementById('hintTitle');
+    const hintTextEl = document.getElementById('hintText');
     const statusEl = document.getElementById('status');
     const tiltWarningEl = document.getElementById('tiltWarning');
     const toggleBtn = document.getElementById('toggleBtn');
+    const langToggleBtn = document.getElementById('langToggle');
     const errorDiv = document.getElementById('error');
 
     const captureCanvas = document.createElement('canvas');
@@ -276,12 +297,86 @@
     // DeepLプロキシ(Vercel Serverless Function)。失敗時はMyMemory APIにフォールバックする。
     const TRANSLATE_PROXY_URL = 'https://claude-pi-lilac.vercel.app/api/translate';
 
+    // 言語ペア定義。scriptTestは検出したOCR行がノイズでないかの判定に使う文字種の正規表現
+    const LANG_PAIRS = {
+      enToJa: {
+        ocrLang: 'eng',
+        targetLang: 'JA',
+        mmPair: 'en|ja',
+        label: 'EN → 日本語',
+        scriptTest: /[A-Za-z]/g,
+        minChars: MIN_LETTERS,
+        uiLang: 'ja',
+      },
+      jaToEn: {
+        ocrLang: 'jpn',
+        targetLang: 'EN',
+        mmPair: 'ja|en',
+        label: '日本語 → EN',
+        scriptTest: /[぀-ヿ一-鿿]/g,
+        minChars: 1,
+        uiLang: 'en',
+      },
+    };
+
+    // UIの説明文言。翻訳先の読み手が読める言語で表示する
+    // (EN→JAは日本語話者向けなので日本語UI、JA→ENは英語話者向けなので英語UI)
+    const STRINGS = {
+      ja: {
+        pageTitle: 'カメラ翻訳',
+        hintTitle: '英語にかざすだけ',
+        hintText: 'カメラで英語のテキストを捉えると、その場に日本語訳を重ねて表示します。',
+        statusIdle: '待機中',
+        statusPreparing: 'OCRエンジンを準備中…',
+        statusSearching: 'テキストを探しています…',
+        statusRecognizing: '認識中…',
+        statusTranslatingCount: (n) => `${n}件を翻訳中`,
+        statusError: '認識エラー',
+        statusSwitching: '言語を切り替え中…',
+        tiltWarning: 'スマホを水平に構えてください',
+        btnStart: 'カメラを起動',
+        btnStarting: '起動中…',
+        btnStop: '停止',
+        errNoCamera: 'このブラウザはカメラ機能に対応していません。\nSafariまたはChromeの最新版でお試しください。',
+        errCameraAccess: 'カメラにアクセスできませんでした。\nブラウザの設定でカメラの使用を許可してください。\n(HTTPS接続が必要です)',
+        errLangSwitch: '言語の切り替えに失敗しました。',
+      },
+      en: {
+        pageTitle: 'Camera Translator',
+        hintTitle: 'Just point at Japanese text',
+        hintText: 'Point your camera at Japanese text and its English translation appears right over it.',
+        statusIdle: 'Idle',
+        statusPreparing: 'Preparing OCR engine…',
+        statusSearching: 'Looking for text…',
+        statusRecognizing: 'Recognizing…',
+        statusTranslatingCount: (n) => `Translating ${n} item${n === 1 ? '' : 's'}`,
+        statusError: 'Recognition error',
+        statusSwitching: 'Switching language…',
+        tiltWarning: 'Please hold your phone level',
+        btnStart: 'Start Camera',
+        btnStarting: 'Starting…',
+        btnStop: 'Stop',
+        errNoCamera: 'This browser does not support camera access.\nPlease try the latest Safari or Chrome.',
+        errCameraAccess: 'Could not access the camera.\nPlease allow camera access in your browser settings.\n(HTTPS connection required)',
+        errLangSwitch: 'Failed to switch language.',
+      },
+    };
+
     let stream = null;
     let worker = null;
     let scanning = false;
     let scanTimer = null;
     let lastBoxes = [];
+    let currentPairKey = 'enToJa';
     const translationCache = new Map();
+
+    function currentPair() {
+      return LANG_PAIRS[currentPairKey];
+    }
+
+    function currentStrings() {
+      return STRINGS[currentPair().uiLang];
+    }
 
     function showError(message) {
       errorDiv.textContent = message;
@@ -344,10 +439,15 @@
       tiltWarningEl.style.display = 'none';
     }
 
-    async function ensureWorker() {
-      if (worker) return worker;
-      statusEl.textContent = 'OCRエンジンを準備中…';
-      worker = await Tesseract.createWorker('eng');
+    async function ensureWorker(ocrLang) {
+      if (worker && worker.__lang === ocrLang) return worker;
+      if (worker) {
+        await worker.terminate();
+        worker = null;
+      }
+      statusEl.textContent = currentStrings().statusPreparing;
+      worker = await Tesseract.createWorker(ocrLang);
+      worker.__lang = ocrLang;
       // SPARSE_TEXT: 看板やパッケージのようにバラバラに散らばった文字を想定したモード
       // (デフォルトのAUTOは文書レイアウト前提であまり向かない)
       await worker.setParameters({ tessedit_pageseg_mode: '11' });
@@ -357,11 +457,11 @@
     async function startCamera() {
       hideError();
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        showError('このブラウザはカメラ機能に対応していません。\nSafariまたはChromeの最新版でお試しください。');
+        showError(currentStrings().errNoCamera);
         return;
       }
       toggleBtn.disabled = true;
-      toggleBtn.textContent = '起動中…';
+      toggleBtn.textContent = currentStrings().btnStarting;
       try {
         stream = await getCameraStream();
         video.srcObject = stream;
@@ -369,20 +469,20 @@
         hint.style.display = 'none';
         resizeOverlay();
 
-        await ensureWorker();
+        await ensureWorker(currentPair().ocrLang);
         enableTiltWarning();
 
         scanning = true;
-        statusEl.textContent = 'テキストを探しています…';
-        toggleBtn.textContent = '停止';
+        statusEl.textContent = currentStrings().statusSearching;
+        toggleBtn.textContent = currentStrings().btnStop;
         toggleBtn.classList.add('active');
         toggleBtn.disabled = false;
         scheduleScan(200);
       } catch (err) {
         console.error(err);
-        toggleBtn.textContent = 'カメラを起動';
+        toggleBtn.textContent = currentStrings().btnStart;
         toggleBtn.disabled = false;
-        showError('カメラにアクセスできませんでした。\nブラウザの設定でカメラの使用を許可してください。\n(HTTPS接続が必要です)');
+        showError(currentStrings().errCameraAccess);
       }
     }
 
@@ -398,9 +498,9 @@
       lastBoxes = [];
       overlayCtx.clearRect(0, 0, overlay.width, overlay.height);
       toggleBtn.disabled = false;
-      toggleBtn.textContent = 'カメラを起動';
+      toggleBtn.textContent = currentStrings().btnStart;
       toggleBtn.classList.remove('active');
-      statusEl.textContent = '待機中';
+      statusEl.textContent = currentStrings().statusIdle;
       hint.style.display = 'flex';
     }
 
@@ -409,6 +509,51 @@
         stopCamera();
       } else {
         startCamera();
+      }
+    }
+
+    function updateLangUI() {
+      const pair = currentPair();
+      const strings = currentStrings();
+      document.documentElement.lang = pair.uiLang;
+      document.title = strings.pageTitle;
+      langToggleBtn.textContent = pair.label;
+      hintTitleEl.textContent = strings.hintTitle;
+      hintTextEl.textContent = strings.hintText;
+      tiltWarningEl.textContent = strings.tiltWarning;
+      if (stream) {
+        toggleBtn.textContent = strings.btnStop;
+      } else {
+        statusEl.textContent = strings.statusIdle;
+        toggleBtn.textContent = strings.btnStart;
+      }
+    }
+
+    async function toggleLangPair() {
+      currentPairKey = currentPairKey === 'enToJa' ? 'jaToEn' : 'enToJa';
+      updateLangUI();
+      lastBoxes = [];
+      overlayCtx.clearRect(0, 0, overlay.width, overlay.height);
+
+      if (!stream) return;
+
+      // カメラ起動中の切り替え: OCRワーカーを新しい言語のものに作り直す
+      langToggleBtn.disabled = true;
+      toggleBtn.disabled = true;
+      scanning = false;
+      if (scanTimer) { clearTimeout(scanTimer); scanTimer = null; }
+      statusEl.textContent = currentStrings().statusSwitching;
+      try {
+        await ensureWorker(currentPair().ocrLang);
+        scanning = true;
+        statusEl.textContent = currentStrings().statusSearching;
+        scheduleScan(200);
+      } catch (err) {
+        console.error(err);
+        showError(currentStrings().errLangSwitch);
+      } finally {
+        langToggleBtn.disabled = false;
+        toggleBtn.disabled = false;
       }
     }
 
@@ -461,7 +606,7 @@
         return;
       }
       try {
-        statusEl.textContent = '認識中…';
+        statusEl.textContent = currentStrings().statusRecognizing;
 
         const vw = video.videoWidth;
         const vh = video.videoHeight;
@@ -473,13 +618,15 @@
         captureCtx.drawImage(video, 0, 0, cw, ch);
         preprocessForOCR(captureCtx, cw, ch);
 
+        const pair = currentPair();
+
         // rotateAuto: スマホの向き(縦/横/上下逆)を自動検出して補正してから認識する
         const { data } = await worker.recognize(captureCanvas, { rotateAuto: true });
         const lines = (data.lines || []).filter((line) => {
           const t = (line.text || '').trim();
           if (line.confidence < MIN_CONFIDENCE) return false;
-          const letterCount = (t.match(/[A-Za-z]/g) || []).length;
-          return letterCount >= MIN_LETTERS;
+          const charCount = (t.match(pair.scriptTest) || []).length;
+          return charCount >= pair.minChars;
         });
 
         const results = await Promise.all(
@@ -497,13 +644,14 @@
         if (scanning) {
           lastBoxes = boxes;
           drawOverlay();
+          const strings = currentStrings();
           statusEl.textContent = boxes.length
-            ? `${boxes.length}件を翻訳中`
-            : 'テキストを探しています…';
+            ? strings.statusTranslatingCount(boxes.length)
+            : strings.statusSearching;
         }
       } catch (err) {
         console.error(err);
-        if (scanning) statusEl.textContent = '認識エラー';
+        if (scanning) statusEl.textContent = currentStrings().statusError;
       } finally {
         scheduleScan(SCAN_INTERVAL_MS);
       }
@@ -511,20 +659,24 @@
 
     async function translateCached(text) {
       if (!text) return null;
-      if (translationCache.has(text)) return translationCache.get(text);
+      const pair = currentPair();
+      const cacheKey = `${currentPairKey}:${text}`;
+      if (translationCache.has(cacheKey)) return translationCache.get(cacheKey);
 
-      const translated = (await translateViaDeepL(text)) || (await translateViaMyMemory(text));
-      if (translated) cacheSet(text, translated);
+      const translated =
+        (await translateViaDeepL(text, pair.targetLang)) ||
+        (await translateViaMyMemory(text, pair.mmPair));
+      if (translated) cacheSet(cacheKey, translated);
       return translated;
     }
 
-    async function translateViaDeepL(text) {
+    async function translateViaDeepL(text, targetLang) {
       if (!TRANSLATE_PROXY_URL) return null;
       try {
         const res = await fetch(TRANSLATE_PROXY_URL, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text, target_lang: 'JA' }),
+          body: JSON.stringify({ text, target_lang: targetLang }),
         });
         if (!res.ok) return null;
         const data = await res.json();
@@ -537,9 +689,9 @@
       return null;
     }
 
-    async function translateViaMyMemory(text) {
+    async function translateViaMyMemory(text, mmPair) {
       try {
-        const url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=en|ja`;
+        const url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=${mmPair}`;
         const res = await fetch(url);
         if (!res.ok) return null;
         const data = await res.json();
@@ -622,6 +774,8 @@
     }
 
     toggleBtn.addEventListener('click', toggleCamera);
+    langToggleBtn.addEventListener('click', toggleLangPair);
+    updateLangUI();
 
     window.addEventListener('resize', () => {
       if (stream) resizeOverlay();

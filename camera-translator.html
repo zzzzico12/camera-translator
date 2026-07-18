@@ -298,6 +298,9 @@
       if (worker) return worker;
       statusEl.textContent = 'OCRエンジンを準備中…';
       worker = await Tesseract.createWorker('eng');
+      // SPARSE_TEXT: 看板やパッケージのようにバラバラに散らばった文字を想定したモード
+      // (デフォルトのAUTOは文書レイアウト前提であまり向かない)
+      await worker.setParameters({ tessedit_pageseg_mode: '11' });
       return worker;
     }
 
@@ -362,6 +365,43 @@
       scanTimer = setTimeout(runScanCycle, delay);
     }
 
+    // グレースケール化+コントラスト伸長(上下1%の外れ値は無視)。
+    // 看板の照明ムラや反射で眠くなりがちな画像のOCR精度を上げる。
+    // 二値化まではせず、Tesseract内部の適応的な閾値処理に任せる。
+    function preprocessForOCR(ctx, w, h) {
+      const imageData = ctx.getImageData(0, 0, w, h);
+      const data = imageData.data;
+      const pixelCount = w * h;
+      const gray = new Uint8ClampedArray(pixelCount);
+      const hist = new Uint32Array(256);
+
+      for (let i = 0, p = 0; p < pixelCount; i += 4, p++) {
+        const g = (data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114) | 0;
+        gray[p] = g;
+        hist[g]++;
+      }
+
+      const clip = pixelCount * 0.01;
+      let lo = 0;
+      let acc = 0;
+      while (lo < 255 && acc < clip) { acc += hist[lo]; lo++; }
+      let hi = 255;
+      acc = 0;
+      while (hi > 0 && acc < clip) { acc += hist[hi]; hi--; }
+
+      const range = hi - lo;
+      if (range < 10) return; // ほぼ均一な画像は過剰強調を避けてそのまま
+
+      const scale = 255 / range;
+      for (let i = 0, p = 0; p < pixelCount; i += 4, p++) {
+        const v = (gray[p] - lo) * scale;
+        const clamped = v < 0 ? 0 : v > 255 ? 255 : v;
+        data[i] = data[i + 1] = data[i + 2] = clamped;
+      }
+
+      ctx.putImageData(imageData, 0, 0);
+    }
+
     async function runScanCycle() {
       if (!scanning) return;
       if (!video.videoWidth) {
@@ -379,6 +419,7 @@
         captureCanvas.width = cw;
         captureCanvas.height = ch;
         captureCtx.drawImage(video, 0, 0, cw, ch);
+        preprocessForOCR(captureCtx, cw, ch);
 
         const { data } = await worker.recognize(captureCanvas);
         const lines = (data.lines || []).filter((line) => {

@@ -564,7 +564,32 @@
 
     const SHARPEN_AMOUNT = 0.6; // アンシャープマスクの強度
 
-    // グレースケール化+コントラスト伸長(上下1%の外れ値は無視)+アンシャープマスク。
+    // 3x3ボックスブラー。ノイズ除去とアンシャープマスクの両方で使う
+    function boxBlur3x3(src, w, h) {
+      const out = new Float32Array(w * h);
+      for (let y = 0; y < h; y++) {
+        for (let x = 0; x < w; x++) {
+          const p = y * w + x;
+          let sum = 0;
+          let count = 0;
+          for (let dy = -1; dy <= 1; dy++) {
+            const ny = y + dy;
+            if (ny < 0 || ny >= h) continue;
+            const rowBase = ny * w;
+            for (let dx = -1; dx <= 1; dx++) {
+              const nx = x + dx;
+              if (nx < 0 || nx >= w) continue;
+              sum += src[rowBase + nx];
+              count++;
+            }
+          }
+          out[p] = sum / count;
+        }
+      }
+      return out;
+    }
+
+    // グレースケール化+コントラスト伸長(上下1%の外れ値は無視)+ノイズ除去+アンシャープマスク。
     // 看板の照明ムラや反射で眠くなりがちな画像のOCR精度を上げる。
     // 二値化まではせず、Tesseract内部の適応的な閾値処理に任せる。
     function preprocessForOCR(ctx, w, h) {
@@ -598,29 +623,17 @@
         stretched[p] = v < 0 ? 0 : v > 255 ? 255 : v;
       }
 
-      // アンシャープマスク: 3x3ボックスブラーとの差分を強調し、文字のストローク輪郭を締めて小さな文字の潰れを軽減する
-      for (let y = 0; y < h; y++) {
-        for (let x = 0; x < w; x++) {
-          const p = y * w + x;
-          let sum = 0;
-          let count = 0;
-          for (let dy = -1; dy <= 1; dy++) {
-            const ny = y + dy;
-            if (ny < 0 || ny >= h) continue;
-            const rowBase = ny * w;
-            for (let dx = -1; dx <= 1; dx++) {
-              const nx = x + dx;
-              if (nx < 0 || nx >= w) continue;
-              sum += stretched[rowBase + nx];
-              count++;
-            }
-          }
-          const blurred = sum / count;
-          const sharpened = stretched[p] + SHARPEN_AMOUNT * (stretched[p] - blurred);
-          const clamped = sharpened < 0 ? 0 : sharpened > 255 ? 255 : sharpened;
-          const i = p * 4;
-          data[i] = data[i + 1] = data[i + 2] = clamped;
-        }
+      // ノイズ除去: 先に弱いボックスブラーでセンサーノイズを均しておく
+      // (denoiseを挟まずシャープニングだけ行うと、輪郭と一緒にノイズも強調してしまうため)
+      const denoised = boxBlur3x3(stretched, w, h);
+
+      // アンシャープマスク: denoised自身のぼかしとの差分を強調し、文字のストローク輪郭を締めて小さな文字の潰れを軽減する
+      const blurredForSharpen = boxBlur3x3(denoised, w, h);
+      for (let p = 0; p < pixelCount; p++) {
+        const sharpened = denoised[p] + SHARPEN_AMOUNT * (denoised[p] - blurredForSharpen[p]);
+        const clamped = sharpened < 0 ? 0 : sharpened > 255 ? 255 : sharpened;
+        const i = p * 4;
+        data[i] = data[i + 1] = data[i + 2] = clamped;
       }
 
       ctx.putImageData(imageData, 0, 0);
